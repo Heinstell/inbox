@@ -96,19 +96,17 @@ interface EmailListResponse {
 
 const api = {
 	// Config
-	getConfig: () =>
-		get<{ domains: string[]; emailAddresses: string[] }>("/api/v1/config"),
+	getConfig: () => get<{ domains: string[] }>("/api/v1/config"),
+
+	// Signed-in user (from Cloudflare Access) and the mailboxes they own
+	getMe: () => get<{ email: string; mailboxes: string[] }>("/api/v1/me"),
 
 	// Mailboxes
 	listMailboxes: () => get<Mailbox[]>("/api/v1/mailboxes"),
-	createMailbox: (email: string, name: string, settings?: unknown) =>
-		post<Mailbox>("/api/v1/mailboxes", { email, name, settings }),
 	getMailbox: (mailboxId: string) =>
 		get<Mailbox>(`/api/v1/mailboxes/${mailboxId}`),
 	updateMailbox: (mailboxId: string, settings: unknown) =>
 		put<Mailbox>(`/api/v1/mailboxes/${mailboxId}`, { settings }),
-	deleteMailbox: (mailboxId: string) =>
-		del<void>(`/api/v1/mailboxes/${mailboxId}`),
 
 	// Emails
 	listEmails: (mailboxId: string, params: Record<string, string>, opts?: { signal?: AbortSignal }) =>

@@ -15,4 +15,29 @@ export default defineConfig({
     reactRouter(),
     tsconfigPaths(),
   ],
+  // Pre-bundle client dependencies on startup. Without this Vite discovers them
+  // lazily on the first page load, re-optimizes and reloads mid-request, and the
+  // browser can end up with two React copies ("Invalid hook call" / useState errors).
+  optimizeDeps: {
+    include: [
+      "react",
+      "react-dom",
+      "react-dom/client",
+      "react-router",
+      "@cloudflare/kumo",
+      "@phosphor-icons/react",
+      "@tanstack/react-query",
+      "zustand",
+      "dompurify",
+      "@tiptap/react",
+      "@tiptap/starter-kit",
+      "@tiptap/extension-color",
+      "@tiptap/extension-highlight",
+      "@tiptap/extension-image",
+      "@tiptap/extension-link",
+      "@tiptap/extension-text-align",
+      "@tiptap/extension-text-style",
+      "@tiptap/extension-underline",
+    ],
+  },
 });

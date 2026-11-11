@@ -6,29 +6,27 @@ import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
 import { z } from "zod";
-import { sendEmail } from "./email-sender";
-import { storeAttachments, type StoredAttachment } from "./lib/attachments";
-import {
-	validateSender,
-	SenderValidationError,
-	generateMessageId,
-	buildThreadingHeaders,
-	listMailboxes,
-} from "./lib/email-helpers";
+import { type StoredAttachment } from "./lib/attachments";
 import { SendEmailRequestSchema } from "./lib/schemas";
+import { deliverAndStore } from "./lib/outbound";
 import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
 import { requireMailbox, type MailboxContext } from "./lib/mailbox";
+import { ensureMailbox, getAllowedMailboxes, getDomains, isHostedAddress, isPreProvisionedAddress } from "./lib/auth";
+import { loadRoutingDirectory } from "./lib/routing-directory";
 
 type AppContext = Context<MailboxContext>;
 
 // -- Request body schemas (kept for validation) ---------------------
 
-const CreateMailboxBody = z.object({
-	email: z.string().email(),
-	name: z.string().min(1),
-	settings: z.record(z.any()).optional(), // unvalidated — agentSystemPrompt goes straight to AI
+const MailboxSettingsBody = z.object({
+	settings: z.object({
+		fromName: z.string().max(200).optional(),
+		forwarding: z.object({ enabled: z.boolean(), email: z.string() }).optional(),
+		signature: z.object({ enabled: z.boolean(), text: z.string(), html: z.string().optional() }).optional(),
+		autoReply: z.object({ enabled: z.boolean(), subject: z.string(), message: z.string() }).optional(),
+	}).passthrough(),
 });
 
 const DraftBody = z.object({
@@ -81,63 +79,58 @@ app.use("/api/*", cors({
 		return undefined;
 	},
 }));
+app.use("/api/v1/mailboxes/:mailboxId", requireMailbox);
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
-// -- Config ---------------------------------------------------------
+// -- Config & identity ----------------------------------------------
 
 app.get("/api/v1/config", (c) => {
-	const domainsRaw = c.env.DOMAINS || "";
-	const domains = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
-	const emailAddresses = c.env.EMAIL_ADDRESSES ?? [];
-	return c.json({ domains, emailAddresses });
+	return c.json({ domains: getDomains(c.env) });
+});
+
+/** The signed-in user and the mailboxes they may open. */
+app.get("/api/v1/me", async (c: AppContext) => {
+	const email = c.var.userEmail;
+	if (!email) {
+		return c.json({
+			error: import.meta.env.DEV
+				? "Not signed in. Set DEV_USER_EMAIL in .dev.vars for local development."
+				: "Not signed in",
+		}, 401);
+	}
+	const directory = await loadRoutingDirectory(c.env);
+	return c.json({ email, mailboxes: getAllowedMailboxes(c.env, email, directory) });
 });
 
 // -- Mailboxes ------------------------------------------------------
 
-app.get("/api/v1/mailboxes", async (c) => {
-	const allMailboxes = await listMailboxes(c.env.BUCKET);
-	return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+/** Lists only the mailboxes the signed-in user owns (creating them on first sign-in). */
+app.get("/api/v1/mailboxes", async (c: AppContext) => {
+	const email = c.var.userEmail;
+	if (!email) return c.json({ error: "Not signed in" }, 401);
+	const ids = getAllowedMailboxes(c.env, email, await loadRoutingDirectory(c.env));
+	const mailboxes = await Promise.all(ids.map(async (id) => {
+		await ensureMailbox(c.env, id);
+		const obj = await c.env.BUCKET.get(`mailboxes/${id}.json`);
+		const settings = obj ? await obj.json<Record<string, unknown>>() : {};
+		return { id, email: id, name: (settings.fromName as string) || id, settings };
+	}));
+	return c.json(mailboxes);
 });
 
-app.post("/api/v1/mailboxes", async (c) => {
-	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
-	const email = rawEmail.toLowerCase();
-	const allowedAddresses = (c.env.EMAIL_ADDRESSES ?? []) as string[];
-	if (allowedAddresses.length > 0 && !allowedAddresses.map((a) => a.toLowerCase()).includes(email)) {
-		return c.json({ error: "Mailbox creation is restricted to configured EMAIL_ADDRESSES" }, 403);
-	}
-	const key = `mailboxes/${email}.json`;
-	if (await c.env.BUCKET.head(key)) return c.json({ error: "Mailbox already exists" }, 409);
-	const defaultSettings = { fromName: name, forwarding: { enabled: false, email: "" }, signature: { enabled: false, text: "" }, autoReply: { enabled: false, subject: "", message: "" } };
-	const finalSettings = { ...defaultSettings, ...settings };
-	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
-	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(email));
-	await stub.getFolders();
-	return c.json({ id: email, email, name, settings: finalSettings }, 201);
-});
-
-app.get("/api/v1/mailboxes/:mailboxId", async (c) => {
-	const mailboxId = c.req.param("mailboxId")!;
+app.get("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
+	const mailboxId = c.var.mailboxId;
 	const obj = await c.env.BUCKET.get(`mailboxes/${mailboxId}.json`);
 	if (!obj) return c.json({ error: "Not found" }, 404);
-	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings: await obj.json() });
+	const settings = await obj.json<Record<string, unknown>>();
+	return c.json({ id: mailboxId, name: (settings.fromName as string) || mailboxId, email: mailboxId, settings });
 });
 
-app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
-	const mailboxId = c.req.param("mailboxId")!;
-	const { settings } = (await c.req.json()) as { settings: Record<string, unknown> };
-	const key = `mailboxes/${mailboxId}.json`;
-	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
-	await c.env.BUCKET.put(key, JSON.stringify(settings));
-	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
-});
-
-app.delete("/api/v1/mailboxes/:mailboxId", async (c) => {
-	const mailboxId = c.req.param("mailboxId")!;
-	const key = `mailboxes/${mailboxId}.json`;
-	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
-	await c.env.BUCKET.delete(key); // TODO: also delete DO data and R2 attachment blobs
-	return c.body(null, 204);
+app.put("/api/v1/mailboxes/:mailboxId", async (c: AppContext) => {
+	const mailboxId = c.var.mailboxId;
+	const { settings } = MailboxSettingsBody.parse(await c.req.json());
+	await c.env.BUCKET.put(`mailboxes/${mailboxId}.json`, JSON.stringify(settings));
+	return c.json({ id: mailboxId, name: settings.fromName || mailboxId, email: mailboxId, settings });
 });
 
 // -- Emails ---------------------------------------------------------
@@ -166,53 +159,16 @@ app.get("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
-	const mailboxId = c.req.param("mailboxId")!;
 	const body = SendEmailRequestSchema.parse(await c.req.json());
-	const { to, cc, bcc, from, subject, html, text, attachments, in_reply_to, references, thread_id } = body;
-
-	let toStr: string, fromEmail: string, fromDomain: string;
-	try {
-		({ toStr, fromEmail, fromDomain } = validateSender(to, from, mailboxId));
-	} catch (e) {
-		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
-		throw e;
-	}
-
-	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
-	const stub = c.var.mailboxStub;
-	const rateLimitError = await (stub as any).checkSendRateLimit();
-	if (rateLimitError) return c.json({ error: rateLimitError }, 429);
-	const attachmentData = await storeAttachments(c.env.BUCKET, messageId, attachments);
-
-	await stub.createEmail(Folders.SENT, {
-		id: messageId, subject, sender: fromEmail, recipient: toStr,
-		cc: cc ? (Array.isArray(cc) ? cc.join(", ") : cc).toLowerCase() : null,
-		bcc: bcc ? (Array.isArray(bcc) ? bcc.join(", ") : bcc).toLowerCase() : null,
-		date: new Date().toISOString(), body: html || text || "",
-		in_reply_to: in_reply_to || null, email_references: references ? JSON.stringify(references) : null,
-		thread_id: thread_id || in_reply_to || messageId, message_id: outgoingMessageId,
-		raw_headers: JSON.stringify([
-			{ key: "from", value: typeof from === "string" ? from : `${from.name} <${from.email}>` },
-			{ key: "to", value: Array.isArray(to) ? to.join(", ") : to },
-			...(cc ? [{ key: "cc", value: Array.isArray(cc) ? cc.join(", ") : cc }] : []),
-			...(bcc ? [{ key: "bcc", value: Array.isArray(bcc) ? bcc.join(", ") : bcc }] : []),
-			{ key: "subject", value: subject }, { key: "date", value: new Date().toISOString() },
-			{ key: "message-id", value: `<${outgoingMessageId}>` },
-		]),
-	}, attachmentData);
-
-	c.executionCtx.waitUntil(
-		sendEmail(c.env.EMAIL, {
-			to, cc, bcc, from, subject, html, text,
-			attachments: attachments?.map((att) => ({ content: att.content, filename: att.filename, type: att.type, disposition: att.disposition || "attachment", contentId: att.contentId })),
-			...(in_reply_to ? { headers: buildThreadingHeaders(in_reply_to, references || []) } : {}),
-		}).catch((e) => console.error("Deferred email delivery failed:", (e as Error).message)),
-	);
-	return c.json({ id: messageId, status: "sent" }, 202);
+	return deliverAndStore(c, c.var.mailboxId, body, {
+		inReplyTo: body.in_reply_to || null,
+		references: body.references || [],
+		threadId: body.thread_id || null,
+	});
 });
 
 app.post("/api/v1/mailboxes/:mailboxId/drafts", async (c: AppContext) => {
-	const mailboxId = c.req.param("mailboxId")!;
+	const mailboxId = c.var.mailboxId;
 	const { to, cc, bcc, subject, body, in_reply_to, thread_id, draft_id } = DraftBody.parse(await c.req.json());
 	const stub = c.var.mailboxStub;
 	if (draft_id) await stub.deleteEmail(draft_id); // not atomic — create-then-delete would be safer
@@ -345,26 +301,38 @@ async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
 	return result;
 }
 
-async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env: Env, ctx: ExecutionContext) {
+type InboundEmail = Pick<ForwardableEmailMessage, "raw" | "rawSize"> &
+	Partial<Pick<ForwardableEmailMessage, "to" | "setReject" | "forward">>;
+
+async function receiveEmail(event: InboundEmail, env: Env, _ctx: ExecutionContext) {
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
 
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) throw new Error("received email with empty to");
-
-	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to.map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
+	const allRecipients = (parsedEmail.to || []).map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
 	const ccRecipients = (parsedEmail.cc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 	const bccRecipients = (parsedEmail.bcc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 
-	let mailboxId: string | undefined;
-	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
-	} else { mailboxId = allRecipients[0]; }
-	if (!mailboxId) throw new Error("received email with no valid recipient address");
+	// Prefer the SMTP envelope recipient: it is the address Email Routing
+	// delivered to, and is correct for Bcc'd and Cc'd mail too.
+	const mailboxId = (event.to || allRecipients.find((a) => isHostedAddress(env, a)) || "").toLowerCase();
+	if (!mailboxId || !isHostedAddress(env, mailboxId)) {
+		console.log(`Rejecting email: ${mailboxId || "(no recipient)"} is not a hosted address`);
+		event.setReject?.("Unknown recipient");
+		return;
+	}
+
+	const directory = await loadRoutingDirectory(env);
+	const mailboxExists = !!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`));
+	if (!mailboxExists) {
+		if (!isPreProvisionedAddress(env, mailboxId, directory)) {
+			console.log(`Rejecting email for ${mailboxId}: mailbox does not exist yet`);
+			event.setReject?.("Unknown recipient");
+			return;
+		}
+		await ensureMailbox(env, mailboxId);
+	}
 
 	const messageId = crypto.randomUUID();
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
 
 	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
@@ -394,7 +362,7 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 
 	await stub.createEmail(Folders.INBOX, {
 		id: messageId, subject: parsedEmail.subject || "",
-		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", "),
+		sender: (parsedEmail.from?.address || "").toLowerCase(), recipient: allRecipients.join(", ") || mailboxId,
 		cc: ccRecipients.join(", ") || null, bcc: bccRecipients.join(", ") || null,
 		date: new Date().toISOString(), // uses receive time, not the email's Date header
 		body: parsedEmail.html || parsedEmail.text || "",
@@ -402,11 +370,18 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
 
-	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
-	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {
-		method: "POST", headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
-	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
+	// Forward a copy to the addresses in the mailbox's Email Routing rule
+	// (e.g. john@gmail.com). Stored first, so a forwarding failure is logged
+	// rather than re-thrown, which would make Email Routing retry and store
+	// the message twice.
+	for (const dest of directory.forwards[mailboxId] ?? []) {
+		if (!event.forward) break;
+		try {
+			await event.forward(dest);
+		} catch (e) {
+			console.error(`Forwarding ${mailboxId} -> ${dest} failed (is it a verified destination address?):`, (e as Error).message);
+		}
+	}
 }
 
 export { app, receiveEmail };

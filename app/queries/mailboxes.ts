@@ -7,6 +7,15 @@ import api from "~/services/api";
 import type { Mailbox } from "~/types";
 import { queryKeys } from "./keys";
 
+export function useMe() {
+	return useQuery({
+		queryKey: queryKeys.me,
+		queryFn: () => api.getMe(),
+		staleTime: Infinity,
+		retry: false,
+	});
+}
+
 export function useMailboxes() {
 	return useQuery<Mailbox[]>({
 		queryKey: queryKeys.mailboxes.all,
@@ -24,17 +33,6 @@ export function useMailbox(mailboxId: string | undefined) {
 	});
 }
 
-export function useCreateMailbox() {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: ({ email, name }: { email: string; name: string }) =>
-			api.createMailbox(email, name),
-		onSuccess: () => {
-			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
-		},
-	});
-}
-
 export function useUpdateMailbox() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -45,16 +43,6 @@ export function useUpdateMailbox() {
 			api.updateMailbox(mailboxId, settings),
 		onSuccess: (_data, { mailboxId }) => {
 			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.detail(mailboxId) });
-			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
-		},
-	});
-}
-
-export function useDeleteMailbox() {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: (mailboxId: string) => api.deleteMailbox(mailboxId),
-		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
 		},
 	});

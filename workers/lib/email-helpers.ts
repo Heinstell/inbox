@@ -3,15 +3,13 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 /**
- * Shared email helpers to eliminate duplication across API routes, MCP, and agent.
+ * Shared email helpers used by the API routes.
  *
- * Includes: DO stub helpers, sender validation, message-ID generation,
- * threading, HTML utilities, and tool-logic (getFullEmail / getFullThread).
+ * Includes: sender validation, message-ID generation, threading and HTML utilities.
  */
 import type { MailboxDO } from "../durableObject";
 import type { EmailFull } from "./schemas";
 import { Folders } from "../../shared/folders";
-import type { Env } from "../types";
 import { formatQuotedDate } from "../../shared/dates";
 
 // ── DO Stub ────────────────────────────────────────────────────────

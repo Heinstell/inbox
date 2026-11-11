@@ -1,3 +1,26 @@
-# Cloudflare Access (required in production). TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
-POLICY_AUD=your-access-policy-audience-tag
-TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+# Copy to .dev.vars for local development (`bun run dev`). Never commit .dev.vars.
+
+# Local development has no Cloudflare Access in front of it, so the app acts
+# as this user. Must be an address on one of the DOMAINS in wrangler.jsonc.
+DEV_USER_EMAIL=you@example.com
+
+# Member directory: read-only Cloudflare API token for Email Routing rules
+# (see docs/members.md). With it, a forwarding rule you@example.com -> you@gmail.com
+# lets you@gmail.com open you@example.com. Set CF_ZONE_ID in wrangler.jsonc.
+# CF_API_TOKEN=your-api-token
+
+# Optional manual override: map a sign-in identity to mailbox(es), as JSON.
+# With this, set DEV_USER_EMAIL to the Gmail address to test the mapping.
+# MAILBOX_OWNERS={"you@gmail.com":["you@example.com"]}
+
+# SMTP relay used for sending (overrides the vars in wrangler.jsonc).
+SMTP_HOST=smtp.server.com
+SMTP_PORT=465
+SMTP_SECURE=tls
+SMTP_USERNAME=your-smtp-username
+SMTP_PASSWORD=your-smtp-password
+
+# Cloudflare Access (production only, set as Worker secrets).
+# TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
+# POLICY_AUD=your-access-policy-audience-tag
+# TEAM_DOMAIN=https://your-team.cloudflareaccess.com

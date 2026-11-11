@@ -5,8 +5,7 @@
 /**
  * Shared types and Zod schemas for email data.
  *
- * Types (from email-types.ts): used by the agent, MCP server, and route
- * handlers to avoid `as any` casting.
+ * Types: used by route handlers to avoid `as any` casting.
  *
  * Zod schemas: used across route handlers to eliminate duplication.
  */

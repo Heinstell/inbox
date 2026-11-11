@@ -11,9 +11,5 @@ build/
 !.dev.vars.example
 .vite/
 dist/
-snapshot-*.txt
-.agents/
-opencode.jsonc
-skills-lock.json
 .DS_Store
 worker-configuration.d.ts

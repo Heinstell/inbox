@@ -10,41 +10,48 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
-		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
-		// The worker now fails closed outside local development if Access is not configured.
-		"DOMAINS": "example.com",
-		"EMAIL_ADDRESSES": []
+		// Comma-separated list of domains this inbox receives mail for.
+		"DOMAINS": "heinstell.com",
+		// Optional allowlist of mailbox addresses. Empty = any address on DOMAINS.
+		// Addresses listed here also receive mail before their owner first signs in.
+		"EMAIL_ADDRESSES": [],
+		// Member directory from Email Routing (see docs/members.md): the zone ID(s)
+		// of your domain(s), comma-separated. Also set the CF_API_TOKEN secret.
+		// A forwarding rule "john@yourdomain → john@gmail.com" then lets
+		// john@gmail.com sign in to john@yourdomain, with no config in this app.
+		"CF_ZONE_ID": "4f2d1ffdfde7e81561920d93219fa793",
+		// MAILBOX_OWNERS (optional, manual override) maps a Cloudflare Access identity to mailbox
+		// address(es), for users who sign in with an identity that is not their inbox
+		// address, e.g. a personal Gmail. It holds personal addresses, so it is set as a
+		// secret (JSON string) rather than here:
+		//   bunx wrangler secret put MAILBOX_OWNERS
+		//   {"you@gmail.com":["you@example.com"]}
+		// Locally, put the same JSON in .dev.vars.
+		// Outbound SMTP relay (e.g. SMTP2GO). SMTP_USERNAME and SMTP_PASSWORD
+		// must be set as secrets: `bunx wrangler secret put SMTP_PASSWORD`.
+		"SMTP_HOST": "mail.smtp2go.com",
+		"SMTP_PORT": "465",
+		// "tls" (implicit TLS, usually 465), "starttls" (587/2525) or "none" (local testing only).
+		"SMTP_SECURE": "tls"
+		// Production deploys must also define the POLICY_AUD and TEAM_DOMAIN secrets
+		// (Cloudflare Access). The worker fails closed if Access is not configured.
 	},
-	"send_email": [
-		{
-			"name": "EMAIL",
-			"remote": true
-		}
-	],
 	"r2_buckets": [
 		{
 			"binding": "BUCKET",
 			"bucket_name": "agentic-inbox",
 			"preview_bucket_name": "agentic-inbox"
+		},
+		{
+			"bucket_name": "agentic-inbox",
+			"binding": "agentic_inbox"
 		}
 	],
-	"ai": {
-		"binding": "AI"
-	},
 	"durable_objects": {
 		"bindings": [
 			{
 				"name": "MAILBOX",
 				"class_name": "MailboxDO"
-			},
-			{
-				"name": "EMAIL_AGENT",
-				"class_name": "EmailAgent"
-			},
-			{
-				"name": "EMAIL_MCP",
-				"class_name": "EmailMCP"
 			}
 		]
 	},
@@ -64,6 +71,15 @@
 		{
 			"tag": "v3",
 			"new_sqlite_classes": [
+				"EmailMCP"
+			]
+		},
+		{
+			// The AI agent and MCP server were removed. This deletes their Durable
+			// Object classes (and any stored chat history) on existing deployments.
+			"tag": "v4",
+			"deleted_classes": [
+				"EmailAgent",
 				"EmailMCP"
 			]
 		}
