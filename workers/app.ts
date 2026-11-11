@@ -17,6 +17,8 @@ declare module "react-router" {
 			env: Env;
 			ctx: ExecutionContext;
 		};
+		/** Signed-in Access identity (or DEV_USER_EMAIL locally), if any. */
+		userEmail?: string;
 	}
 }
 
@@ -99,6 +101,7 @@ app.route("/", apiApp);
 app.all("*", (c) => {
 	return requestHandler(c.req.raw, {
 		cloudflare: { env: c.env, ctx: c.executionCtx as ExecutionContext },
+		userEmail: c.var.userEmail,
 	});
 });
 

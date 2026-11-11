@@ -4,11 +4,31 @@
 
 import { useEffect, useRef } from "react";
 import { Outlet, useParams } from "react-router";
+import type { Route } from "./+types/mailbox";
+import { canAccessMailbox } from "../../workers/lib/auth";
+import { loadRoutingDirectory } from "../../workers/lib/routing-directory";
 import ComposeEmail from "~/components/ComposeEmail";
 import Header from "~/components/Header";
 import Sidebar from "~/components/Sidebar";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
+
+/**
+ * Server-side guard: runs on the Worker for every page load and in-app
+ * navigation under /mailbox/:mailboxId. Mailboxes the signed-in user doesn't
+ * own get a 404 page, so they can't even open the (empty) mailbox shell.
+ */
+export async function loader({ params, context }: Route.LoaderArgs) {
+	const { env } = context.cloudflare;
+	const userEmail = context.userEmail;
+	if (!userEmail) throw new Response("Not signed in", { status: 401 });
+	const mailboxId = decodeURIComponent(params.mailboxId).toLowerCase();
+	const directory = await loadRoutingDirectory(env);
+	if (!canAccessMailbox(env, userEmail, mailboxId, directory)) {
+		throw new Response("Not Found", { status: 404 });
+	}
+	return null;
+}
 
 export default function MailboxRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
