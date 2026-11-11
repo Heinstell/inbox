@@ -54,7 +54,10 @@ The quickest route is **one-click Access for Workers**:
 4. In *Zero Trust → Access → Applications*, open the application that was created and edit its **policy**. One-click Access starts with a permissive default, so restrict it to the people who should have inboxes. For example:
    - *Include → Emails ending in* `@example.com` (Option A), or
    - *Include → Emails* listing each allowed identity (Option B).
-5. In *Zero Trust → Settings → Authentication*, add your identity provider (Google Workspace, Entra ID, …) and enable it on the application.
+5. Add your login method: Cloudflare One (`one.dash.cloudflare.com`) → **Integrations → Identity providers → Add an identity provider** (older dashboards: *Settings → Authentication → Login methods*). For Gmail sign-in, use **One-time PIN**.
+6. In the application's **Authentication** tab: turn **off** *Accept all available identity providers*, select only your provider (e.g. **One-time PIN**; remove "Cloudflare", which only admits dashboard users), and turn **on** *Apply instant authentication*.
+
+When the one-click dialog asks who may access the app, choose **email domain** with the domain people **sign in with** (e.g. `gmail.com`), not *Cloudflare account*. The policy action must be **Allow**; *Bypass* lets people through without signing in, and the app then rejects them with *Missing required CF Access JWT*.
 
 The Access policy decides **who may reach the app at all**. The Worker decides **which mailbox each of them sees**. Keep both tight.
 

@@ -33,7 +33,9 @@ bun run deploy
 
 ## Documentation
 
-Everything is in [`docs/`](./docs/README.md):
+**New here? Follow [STEPBYSTEP.md](./STEPBYSTEP.md)**: the complete setup, from an empty Cloudflare account to a working inbox, including the errors you may hit.
+
+Reference docs are in [`docs/`](./docs/README.md):
 
 - [Setup](./docs/setup.md): prerequisites, Bun, local development
 - [Configuration](./docs/configuration.md): all variables and secrets

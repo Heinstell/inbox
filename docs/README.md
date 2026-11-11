@@ -2,6 +2,8 @@
 
 Inbox is a self-hosted email client that runs on Cloudflare Workers. Mail comes in through **Cloudflare Email Routing**, goes out through **any SMTP relay you choose** (SMTP2GO, Mailgun, Postmark, Amazon SES, …), and each person signs in with **Cloudflare Access** and sees only their own mailbox.
 
+> **Setting up for the first time?** Follow [STEPBYSTEP.md](../STEPBYSTEP.md) from top to bottom. The guides below are the reference.
+
 | Guide | What it covers |
 | --- | --- |
 | [Setup](./setup.md) | Prerequisites, installing with Bun, running locally |
